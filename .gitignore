@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# R scDblFinder reference clone (not our code)
+scDblFinder-ref/
+
+# Data caches + example artifacts
+examples/compare_out/
+examples/data/
+data/
+Rplots.pdf
