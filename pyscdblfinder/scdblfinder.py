@@ -76,6 +76,9 @@ class ScDblFinder:
         max_depth: int = 4,
         iter: int = 3,
         threshold: bool = True,
+        knn_fn=None,
+        knn_backend: str = "auto",
+        pca_backend: str = "auto",
         verbose: bool = False,
     ) -> AnnData:
         """Run scDblFinder and write results to ``adata.obs``.
@@ -102,6 +105,7 @@ class ScDblFinder:
             prop_random=prop_random, include_pcs=include_pcs,
             nrounds=nrounds, max_depth=max_depth, iter=iter,
             threshold=threshold,
+            knn_fn=knn_fn, knn_backend=knn_backend, pca_backend=pca_backend,
             random_state=self.random_state,
             verbose=verbose,
         )

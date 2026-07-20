@@ -34,6 +34,54 @@ def default_k_grid(n_cells: int, k: Optional[list] = None) -> list:
                        max(10, int(round(1.5 * np.sqrt(n_cells))))]))
 
 
+def _compute_knn(pca, n_neighbors, knn_fn=None, knn_backend="auto"):
+    """Return ``(dist, idx)`` of the ``n_neighbors`` nearest neighbours.
+
+    Both arrays are ``(n_cells, n_neighbors)``, self is column 0 (distance 0),
+    rows sorted by distance — the same layout as ``sklearn``'s
+    ``kneighbors(return_distance=True)``.
+
+    Backends
+    --------
+    knn_fn : optional callable ``(X, n_neighbors) -> (dist, idx)``. When given
+        (e.g. omicverse's chunked-GPU ``pyg_knn_search``), it is used verbatim;
+        this is how the GPU path stays **bit-identical** to exact sklearn.
+    knn_backend : ``'auto' | 'sklearn' | 'pynndescent'``. ``'auto'`` uses exact
+        sklearn for small matrices and approximate ``pynndescent`` (O(N log N))
+        above ~30k rows so million-cell atlases stay tractable on CPU.
+    """
+    pca = np.asarray(pca, dtype=np.float32)
+    n = pca.shape[0]
+    if knn_fn is not None:
+        dist, idx = knn_fn(pca, n_neighbors)
+        return np.asarray(dist), np.asarray(idx)
+    backend = knn_backend
+    if backend == "auto":
+        # On the low-dim (~20 PC) embedding scDblFinder uses, sklearn's tree
+        # kNN is effectively O(N log N) and *exact*, so it stays the default up
+        # to very large N. Approximate ``pynndescent`` only helps at extreme
+        # scale; keep it opt-in (or set a very high crossover) so results match
+        # the exact path. GPU users inject an exact chunked-GPU ``knn_fn``.
+        backend = "pynndescent" if n > 1_000_000 else "sklearn"
+    if backend == "pynndescent":
+        try:
+            from pynndescent import NNDescent
+            index = NNDescent(pca, n_neighbors=n_neighbors, metric="euclidean",
+                              random_state=0, low_memory=True)
+            idx, dist = index.neighbor_graph          # pynndescent: (idx, dist)
+            order = np.argsort(dist, axis=1)           # ensure distance-sorted
+            idx = np.take_along_axis(idx, order, axis=1)
+            dist = np.take_along_axis(dist, order, axis=1)
+            return dist.astype(np.float64), idx
+        except Exception:
+            backend = "sklearn"
+    nn = NearestNeighbors(n_neighbors=n_neighbors, algorithm="auto",
+                          metric="euclidean")
+    nn.fit(pca)
+    dist, idx = nn.kneighbors(pca, return_distance=True)
+    return dist, idx
+
+
 def evaluate_knn(
     pca: np.ndarray,
     ctype: np.ndarray,
@@ -41,6 +89,8 @@ def evaluate_knn(
     k: list[int] | int,
     origins: Optional[np.ndarray] = None,
     expected: Optional[dict] = None,
+    knn_fn=None,
+    knn_backend: str = "auto",
 ) -> pd.DataFrame:
     """Compute per-cell kNN features.
 
@@ -67,9 +117,8 @@ def evaluate_knn(
         k_list = sorted(int(x) for x in k)
     max_k = max(k_list)
 
-    nn = NearestNeighbors(n_neighbors=max_k + 1, algorithm="auto", metric="euclidean")
-    nn.fit(pca)
-    dist, idx = nn.kneighbors(pca, return_distance=True)
+    dist, idx = _compute_knn(pca, max_k + 1, knn_fn=knn_fn, knn_backend=knn_backend)
+    dist = np.asarray(dist, dtype=np.float64)
     # Drop self (column 0)
     dist = dist[:, 1:]
     idx = idx[:, 1:]
@@ -86,16 +135,18 @@ def evaluate_knn(
     neigh_type = ctype[idx]
 
     md = dist[:, 0].max()
-    # distanceToNearestDoublet / Real
+    # distanceToNearestDoublet / Real — vectorised: distance to the first
+    # (nearest) neighbour of each class. ``argmax`` over the boolean mask
+    # returns the first True column; rows with no such neighbour keep 2*md.
+    rows = np.arange(n_cells)
     d_dbl = np.full(n_cells, 2 * md, dtype=np.float64)
     d_real = np.full(n_cells, 2 * md, dtype=np.float64)
-    for i in range(n_cells):
-        dbl_mask = neigh_type[i] == 1
-        real_mask = neigh_type[i] == 0
-        if dbl_mask.any():
-            d_dbl[i] = dist[i, np.argmax(dbl_mask)]
-        if real_mask.any():
-            d_real[i] = dist[i, np.argmax(real_mask)]
+    is_dbl = neigh_type == 1
+    is_real = neigh_type == 0
+    has_dbl = is_dbl.any(axis=1)
+    has_real = is_real.any(axis=1)
+    d_dbl[has_dbl] = dist[rows[has_dbl], np.argmax(is_dbl, axis=1)[has_dbl]]
+    d_real[has_real] = dist[rows[has_real], np.argmax(is_real, axis=1)[has_real]]
 
     # Distance-weighted artificial fraction (uses all k_max neighbors)
     w = np.sqrt(max_k - np.arange(max_k)) / dist

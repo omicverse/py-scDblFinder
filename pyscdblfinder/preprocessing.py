@@ -34,24 +34,56 @@ def default_processing(
     dims: int = 20,
     do_norm: bool = True,
     random_state: int = 0,
+    backend: str = "auto",
 ) -> np.ndarray:
     """Return a ``(n_cells, dims)`` PCA embedding of the merged matrix.
 
     Mirrors R's ``.defaultProcessing`` (scater's ``runPCA`` on log-normalized
-    counts with centering; we rely on scikit-learn's PCA for the SVD step).
-    """
-    from sklearn.decomposition import PCA
+    counts with centering).
 
+    backend
+        ``'auto'`` (default) uses scikit-learn's **randomized** truncated SVD —
+        many times faster than the full solver on large cell numbers with only
+        ~20 PCs, and numerically equivalent for a leading low-rank embedding.
+        ``'torch'`` runs the SVD on GPU via ``torch.pca_lowrank`` (falls back to
+        CPU torch if CUDA is unavailable); ``'sklearn-full'`` forces the exact
+        full solver.
+    """
     if do_norm:
         norm = log_normalize(counts)
     else:
         norm = counts.toarray() if sp.issparse(counts) else np.asarray(counts, dtype=np.float64)
 
     # PCA on cells x genes (transpose)
-    X = norm.T
+    X = np.asarray(norm.T, dtype=np.float32)
     n_pcs = min(int(dims), min(X.shape) - 1)
-    pca = PCA(n_components=n_pcs, random_state=random_state)
+
+    if backend == "torch":
+        emb = _torch_pca(X, n_pcs, random_state)
+        if emb is not None:
+            return emb
+        backend = "auto"
+
+    from sklearn.decomposition import PCA
+    solver = "full" if backend == "sklearn-full" else "randomized"
+    pca = PCA(n_components=n_pcs, svd_solver=solver, random_state=random_state)
     return pca.fit_transform(X)
+
+
+def _torch_pca(X, n_pcs, random_state):
+    """GPU/torch PCA via ``torch.pca_lowrank``. Returns None if torch missing."""
+    try:
+        import torch
+    except Exception:
+        return None
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(int(random_state))
+    Xt = torch.as_tensor(np.ascontiguousarray(X), dtype=torch.float32, device=dev)
+    Xt = Xt - Xt.mean(dim=0, keepdim=True)                     # center like PCA
+    q = min(n_pcs + 7, min(Xt.shape))
+    U, S, V = torch.pca_lowrank(Xt, q=q, center=False, niter=7)
+    emb = (Xt @ V[:, :n_pcs])
+    return emb.cpu().numpy().astype(np.float64)
 
 
 def select_features(

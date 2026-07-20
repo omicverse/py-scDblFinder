@@ -66,6 +66,9 @@ def sc_dbl_finder(
     unident_th: Optional[float] = None,
     threshold: bool = True,
     random_state: int = 0,
+    knn_fn=None,
+    knn_backend: str = "auto",
+    pca_backend: str = "auto",
     verbose: bool = False,
 ) -> ScDblFinderResult:
     """Python port of R ``scDblFinder`` (single-sample path).
@@ -129,13 +132,15 @@ def sc_dbl_finder(
     # 5) PCA
     if verbose:
         print(f"[scDblFinder] PCA (dims={dims})")
-    pca = default_processing(merged, dims=dims, random_state=random_state)
+    pca = default_processing(merged, dims=dims, random_state=random_state,
+                             backend=pca_backend)
 
     # 6) kNN features
     if verbose:
         print("[scDblFinder] kNN features")
     k_list = default_k_grid(n_real, k)
-    d = evaluate_knn(pca, ctype, k=k_list, origins=all_origins)
+    d = evaluate_knn(pca, ctype, k=k_list, origins=all_origins,
+                     knn_fn=knn_fn, knn_backend=knn_backend)
     d["type"] = np.where(ctype == 0, "real", "doublet")
     d["src"] = np.where(ctype == 0, "real", "artificial")
     d["cxds_score"] = cxds
