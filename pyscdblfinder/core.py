@@ -70,6 +70,7 @@ def sc_dbl_finder(
     knn_backend: str = "auto",
     pca_backend: str = "auto",
     verbose: bool = False,
+    progress: bool = True,
 ) -> ScDblFinderResult:
     """Python port of R ``scDblFinder`` (single-sample path).
 
@@ -159,6 +160,7 @@ def sc_dbl_finder(
         nrounds=nrounds, max_depth=max_depth, iter=iter,
         dbr=dbr, dbr_per1k=dbr_per1k, unident_th=float(unident_th),
         metric=metric, random_state=random_state, verbose=verbose,
+        progress=progress,
     )
 
     # 8) Threshold

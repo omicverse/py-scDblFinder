@@ -80,6 +80,7 @@ class ScDblFinder:
         knn_backend: str = "auto",
         pca_backend: str = "auto",
         verbose: bool = False,
+        progress: bool = True,
     ) -> AnnData:
         """Run scDblFinder and write results to ``adata.obs``.
 
@@ -107,7 +108,7 @@ class ScDblFinder:
             threshold=threshold,
             knn_fn=knn_fn, knn_backend=knn_backend, pca_backend=pca_backend,
             random_state=self.random_state,
-            verbose=verbose,
+            verbose=verbose, progress=progress,
         )
         real = self.result.real_cells()
         self.adata.obs["scDblFinder_score"] = real["score"].values.astype(float)
