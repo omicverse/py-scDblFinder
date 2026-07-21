@@ -13,6 +13,17 @@ import numpy as np
 import pandas as pd
 
 
+def _progress_iter(iterable, total=None, desc="", enabled=True):
+    """Wrap an iterable in a tqdm progress bar when available and ``enabled``."""
+    if not enabled:
+        return iterable
+    try:
+        from tqdm.auto import tqdm
+        return tqdm(iterable, total=total, desc=desc, leave=False)
+    except Exception:
+        return iterable
+
+
 DEFAULT_EXCLUDE_COLS = {
     "mostLikelyOrigin", "originAmbiguous", "distanceToNearestDoublet",
     "type", "src", "distanceToNearest", "class", "nearestClass",
@@ -34,7 +45,9 @@ def _xgb_train(
     metric: str = "logloss",
     subsample: float = 0.75,
     nfold: int = 5,
-    nthreads: int = 1,
+    nthreads: int = 0,
+    tree_method: str = "hist",
+    device: str = "cpu",
     random_state: int = 0,
 ):
     """Train the binary xgboost classifier.
@@ -42,6 +55,14 @@ def _xgb_train(
     If ``nrounds <= 1``, use 5-fold CV to pick a round count, then subtract
     ``nrounds * sd(CV error)`` from the best round (matches R behavior).
     Otherwise use ``nrounds`` directly.
+
+    Performance
+    -----------
+    ``tree_method='hist'`` (xgboost's own modern default) is 5-10x faster than
+    the old ``'exact'`` at 10^5+ cells with near-identical accuracy, and is the
+    single biggest speedup for large-atlas doublet detection. ``device='auto'``
+    trains on the GPU when a CUDA-capable xgboost build is present (falling back
+    to CPU otherwise); ``nthreads=0`` uses all cores.
     """
     import xgboost as xgb
 
@@ -51,28 +72,52 @@ def _xgb_train(
         "max_depth": int(max_depth),
         "learning_rate": float(eta),
         "subsample": float(subsample),
-        "tree_method": "exact",
+        "tree_method": tree_method,
         "nthread": int(nthreads),
         "verbosity": 0,
         "seed": int(random_state),
     }
+    resolved_device = _resolve_xgb_device(device)
+    if resolved_device == "cuda":
+        params["device"] = "cuda"
     dtrain = xgb.DMatrix(X, label=y.astype(np.float32))
 
-    if nrounds is None or float(nrounds) <= 1.0:
-        cv = xgb.cv(
-            params, dtrain, num_boost_round=100, nfold=min(nfold, max(3, X.shape[0] // 10)),
-            early_stopping_rounds=10, seed=int(random_state), verbose_eval=False,
-        )
-        err_col = next(c for c in cv.columns if c.endswith("-mean") and "test" in c)
-        sd_col = err_col.replace("-mean", "-std")
-        best = int(cv[err_col].idxmin())
-        best -= int(round(float(nrounds) * cv[sd_col].iloc[best]))
-        nrounds = max(5, best)
-    else:
-        nrounds = int(nrounds)
+    def _fit(p):
+        if nrounds is None or float(nrounds) <= 1.0:
+            cv = xgb.cv(
+                p, dtrain, num_boost_round=100,
+                nfold=min(nfold, max(3, X.shape[0] // 10)),
+                early_stopping_rounds=10, seed=int(random_state), verbose_eval=False,
+            )
+            err_col = next(c for c in cv.columns if c.endswith("-mean") and "test" in c)
+            sd_col = err_col.replace("-mean", "-std")
+            best = int(cv[err_col].idxmin())
+            best -= int(round(float(nrounds) * cv[sd_col].iloc[best]))
+            n = max(5, best)
+        else:
+            n = int(nrounds)
+        return xgb.train(p, dtrain, num_boost_round=n)
 
-    bst = xgb.train(params, dtrain, num_boost_round=nrounds)
-    return bst
+    try:
+        return _fit(params)
+    except xgb.core.XGBoostError:
+        # e.g. a non-GPU xgboost build with device='cuda' — retry on CPU.
+        params.pop("device", None)
+        return _fit(params)
+
+
+def _resolve_xgb_device(device: str) -> str:
+    """'auto' → 'cuda' only when torch reports a GPU (xgboost still validated at
+    train time with a CPU fallback); otherwise 'cpu'."""
+    if device == "cpu":
+        return "cpu"
+    if device == "cuda":
+        return "cuda"
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
 
 def scDbl_score(
@@ -89,6 +134,7 @@ def scDbl_score(
     metric: str = "logloss",
     random_state: int = 0,
     verbose: bool = False,
+    progress: bool = True,
 ) -> pd.DataFrame:
     """Port of R ``.scDblscore`` (``scoreType='xgb'``).
 
@@ -128,7 +174,8 @@ def scDbl_score(
         # Expected doublet rate from dbr.per1k: fraction ≈ dbr_per1k * n_real / 1000
         dbr = dbr_per1k * n_real / 1000.0
     # Deviation budget
-    for it in range(int(iter)):
+    for it in _progress_iter(range(int(iter)), total=int(iter),
+                             desc="scDblFinder: training", enabled=progress):
         # Exclude cells that look like doublets (top-dbr-ish fraction) from training
         from .thresholding import doublet_thresholding
         exclude_real = np.where(
