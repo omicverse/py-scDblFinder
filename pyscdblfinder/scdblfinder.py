@@ -79,6 +79,8 @@ class ScDblFinder:
         knn_fn=None,
         knn_backend: str = "auto",
         pca_backend: str = "auto",
+        aggregate_features=False,
+        processing="default",
         verbose: bool = False,
         progress: bool = True,
     ) -> AnnData:
@@ -89,6 +91,9 @@ class ScDblFinder:
             * ``scDblFinder_score``  — per-cell doublet score (0..1)
             * ``scDblFinder_class``  — "doublet" / "singlet"
 
+        For scATAC (cells x peaks or tiles in ``.X``) use
+        ``run(aggregate_features=True, n_features=25,
+        processing="normFeatures")``, as in the scDblFinder ATAC vignette.
         """
         counts = self._counts_gene_by_cell()
         if isinstance(clusters, str):
@@ -107,6 +112,7 @@ class ScDblFinder:
             nrounds=nrounds, max_depth=max_depth, iter=iter,
             threshold=threshold,
             knn_fn=knn_fn, knn_backend=knn_backend, pca_backend=pca_backend,
+            aggregate_features=aggregate_features, processing=processing,
             random_state=self.random_state,
             verbose=verbose, progress=progress,
         )

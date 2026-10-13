@@ -3,9 +3,10 @@
 Follows the R function's single-sample path (``scDblFinder.R`` lines ~330-520)
 end-to-end: feature selection → optional clustering → artificial-doublet
 synthesis → merged-matrix feature extraction → kNN → xgboost scoring →
-thresholding. Multi-sample (``samples=``), ATAC ``aggregateFeatures``,
-``knownDoublets``, and ``clustCor`` paths are not yet ported — follow-up
-work flagged in the README.
+thresholding. ATAC mode (``aggregate_features``, ``processing``) follows
+R's ``aggregateFeatures`` / processing switch. Multi-sample (``samples=``),
+``knownDoublets`` and ``clustCor`` paths are not yet ported — follow-up work
+flagged in the README.
 """
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ import pandas as pd
 import scipy.sparse as sp
 
 from .artificial import get_artificial_doublets
+from .atac import aggregate_features as _aggregate_features
+from .atac import atac_processing, log_norm_counts
 from .classifier import scDbl_score
 from .cxds import cxds_score
 from .knn_features import default_k_grid, evaluate_knn
@@ -69,15 +72,45 @@ def sc_dbl_finder(
     knn_fn=None,
     knn_backend: str = "auto",
     pca_backend: str = "auto",
+    aggregate_features=False,
+    processing="default",
     verbose: bool = False,
     progress: bool = True,
 ) -> ScDblFinderResult:
     """Python port of R ``scDblFinder`` (single-sample path).
 
     Parameters largely match the R signature. ``counts`` must be a
-    **genes × cells** matrix (dense ndarray or scipy sparse).
+    **features × cells** matrix (dense ndarray or scipy sparse).
+
+    ATAC mode
+    ---------
+    aggregate_features
+        R ``aggregateFeatures``. ``True`` aggregates peaks/tiles into
+        ``n_features`` meta-features before anything else (recommended for
+        scATAC). A sequence gives the 1-based SVD components used to
+        cluster features; ``True`` or a single number uses ``2..dims``, as R.
+    processing
+        R ``processing``: ``"default"`` (normalise + PCA), ``"rawPCA"``,
+        ``"rawFeatures"``, ``"normFeatures"`` (log-normalised features used
+        directly, the vignette's choice with few meta-features), ``"atac"``
+        (TF-IDF + uncentred SVD) or a callable ``f(e, dims)`` returning a
+        cells x dims array.
+
+    The scDblFinder ATAC vignette recommends
+    ``sc_dbl_finder(counts, aggregate_features=True, n_features=25,
+    processing="normFeatures")``.
     """
     counts = counts if sp.issparse(counts) else np.asarray(counts, dtype=np.float64)
+
+    if aggregate_features is not False and aggregate_features is not None:
+        if verbose:
+            print("[scDblFinder] aggregating features")
+        if np.isscalar(aggregate_features) or isinstance(aggregate_features, bool):
+            fdims = list(range(2, int(dims) + 1))      # seq_len(dims)[-1]
+        else:
+            fdims = [int(v) for v in aggregate_features]
+        counts = _aggregate_features(counts, dims_use=fdims, k=n_features,
+                                     random_state=random_state)
     n_genes, n_real = counts.shape
 
     if unident_th is None:
@@ -133,8 +166,8 @@ def sc_dbl_finder(
     # 5) PCA
     if verbose:
         print(f"[scDblFinder] PCA (dims={dims})")
-    pca = default_processing(merged, dims=dims, random_state=random_state,
-                             backend=pca_backend)
+    pca = _process(merged, processing, dims=dims, random_state=random_state,
+                   backend=pca_backend)
 
     # 6) kNN features
     if verbose:
@@ -175,3 +208,26 @@ def sc_dbl_finder(
         d["class"] = "singlet"
 
     return ScDblFinderResult(table=d, score_threshold=float(th), n_real=n_real)
+
+
+def _process(e, processing, *, dims, random_state, backend):
+    """R's processing switch (``default``, ``rawPCA``, ``rawFeatures``,
+    ``normFeatures``, ``atac``) or a user callable ``f(e, dims)``."""
+    if callable(processing):
+        out = np.asarray(processing(e, dims=dims))
+        if out.shape[0] != e.shape[1]:
+            raise ValueError("processing function must return cells x dims")
+        return out
+    if processing == "default":
+        return default_processing(e, dims=dims, random_state=random_state,
+                                  backend=backend)
+    if processing == "rawPCA":
+        return default_processing(e, dims=dims, do_norm=False,
+                                  random_state=random_state, backend=backend)
+    if processing == "rawFeatures":
+        return (e.toarray() if sp.issparse(e) else np.asarray(e)).T.astype(np.float64)
+    if processing == "normFeatures":
+        return log_norm_counts(e).T
+    if processing == "atac":
+        return atac_processing(e, dims=dims, random_state=random_state)
+    raise ValueError(f"Unknown processing {processing!r}")
