@@ -73,7 +73,7 @@ def _xgb_train(
         "learning_rate": float(eta),
         "subsample": float(subsample),
         "tree_method": tree_method,
-        "nthread": int(nthreads),
+        "nthread": _resolve_nthreads(nthreads),
         "verbosity": 0,
         "seed": int(random_state),
     }
@@ -104,6 +104,20 @@ def _xgb_train(
         # e.g. a non-GPU xgboost build with device='cuda' — retry on CPU.
         params.pop("device", None)
         return _fit(params)
+
+
+def _resolve_nthreads(nthreads: int) -> int:
+    """``0`` means "all CPUs this process may use". xgboost's own ``0`` counts
+    every core of the machine, which oversubscribes badly inside a container
+    or a cluster job limited to a few CPUs."""
+    if int(nthreads) > 0:
+        return int(nthreads)
+    try:
+        import os
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        import os
+        return max(1, os.cpu_count() or 1)
 
 
 def _resolve_xgb_device(device: str) -> str:
