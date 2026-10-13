@@ -20,10 +20,13 @@ Results are appended at the end, pass or fail.
 Public data: GEO **GSE162690** (Germain et al. 2021 benchmark; cell-line
 scATAC with demuxlet genotype calls), the *LowLoading* sample.
 
-- 3,000 cells drawn at random from the demuxlet singlets and doublets
-  (2,464 SNG, 536 DBL), plus 1,500 ambient barcodes (demuxlet AMB) so that
+- 3,000 cells among the 11,173 that passed ArchR QC (the cells of the
+  released peak matrix): all 336 demuxlet doublets (DBL) among them plus
+  2,664 singlets (SNG) drawn at random, i.e. 11.2% doublets. ArchR QC had
+  already removed many doublets, so a random draw would have left ~100;
+- plus 1,500 ambient barcodes (demuxlet AMB) in the fragment file, so that
   the `minFrags` barcode filter is exercised;
-- fragments on chr1, chr19-chr22 and chrX only (2.32 M fragments). chr1 is
+- fragments of these 4,500 barcodes on chr1, chr19-chr22 and chrX only. chr1 is
   longer than 100 Mb and chrX is a default exclusion chromosome longer than
   100 Mb, which exercises the two R edge cases documented in
   `pyscdblfinder/fragments.py`;
