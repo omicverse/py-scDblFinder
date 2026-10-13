@@ -11,21 +11,21 @@ domain: single-cell   # single-cell | spatial | trajectory | bulk | proteomics |
 upstream:
   name: "scDblFinder"
   source: "Bioconductor"   # CRAN | Bioconductor | GitHub | other
-  version: null   # TODO: upstream version the parity test was run against
+  version: "1.16.0"
   url: "https://bioconductor.org/packages/scDblFinder"
-  license: null   # TODO: upstream R package license (GPL-3, MIT, Artistic-2.0, …)
+  license: "GPL-3"
   citation: "F1000Research 10:979 (2022)."
 omicverse:
   module: null   # TODO: e.g. ov.single.pyDoubletFinder, or leave null
   since: null
 parity:
-  status: unverified   # pass | partial | unverified
-  algorithm_class: null   # TODO: see omicverse-rebuildr/PARITY_TAXONOMY.md
-  metric: null   # TODO: pearson | spearman | ari | jaccard | max_abs_diff | …
-  threshold: null
-  value: null   # TODO: measured value on the canonical fixture
-  fixture: null
-  test: null
+  status: partial   # ATAC deterministic paths exact; stochastic paths at R's seed-to-seed level; RNA scores loosely (see README)
+  algorithm_class: mixed   # amulet/amuletFromCounts deterministic; scDblFinder/clamulet stochastic (xgboost)
+  metric: max_rel_diff (amulet p/q); spearman (scDblFinder ATAC scores)
+  threshold: "1e-10 (amulet); >= 0.9 x R-vs-R spearman (scDblFinder ATAC)"
+  value: "6.5e-15 (amulet); 0.724 vs R-R 0.729 (scDblFinder ATAC)"
+  fixture: "GEO GSE162690 CellLine LowLoading, 3,000 cells (336 demuxlet doublets), chr1/19-22/X fragments"
+  test: "examples/parity_atac.py + tests/r_reference_driver_atac.R; tests/test_atac.py (no R needed)"
 artifacts:
   audit: null
   report: null
