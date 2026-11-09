@@ -83,12 +83,12 @@ tab = pd.DataFrame(rows).sort_values("cells").reset_index(drop=True)
 tab.to_csv(OUT / "comparison_per_dataset.tsv", sep="\t", index=False)
 
 # ======================= Figure 1 =======================
-fig = plt.figure(figsize=(7.2, 5.0))
-gs = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.0], hspace=0.45)
+fig = plt.figure(figsize=(7.2, 4.3))
+gs = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.05], hspace=0.38)
 
 
-def panel(ax, s, dx=-0.12):
-    ax.text(dx, 1.03, s, transform=ax.transAxes, fontsize=9, fontweight="bold", va="bottom", ha="right", color=INK)
+def panel(ax, s, dx=-0.36):
+    ax.text(dx, 1.02, s, transform=ax.transAxes, fontsize=9, fontweight="bold", va="bottom", ha="left", color=INK)
 
 
 def identity(ax, lo, hi):
@@ -100,8 +100,8 @@ def identity(ax, lo, hi):
     ax.set_axisbelow(True)
 
 
-top = gs[0].subgridspec(1, 4, width_ratios=[0.42, 1, 1, 1], wspace=0.42)
-logo = top[0].subgridspec(2, 1, height_ratios=[1.25, 0.55], hspace=0.0)
+top = gs[0].subgridspec(1, 4, width_ratios=[0.55, 1, 1, 1], wspace=0.38)
+logo = top[0].subgridspec(2, 1, height_ratios=[1.3, 0.6], hspace=0.05)
 for k, f in enumerate(["pyscdblfinder_logo.png", "omicverse_logo.png"]):
     axl = fig.add_subplot(logo[k])
     axl.imshow(plt.imread(ASSETS / f))
@@ -113,25 +113,23 @@ axa.errorbar(tab.auprc_R, tab.auprc_py,
              xerr=[tab.auprc_R - tab.auprc_R_min, tab.auprc_R_max - tab.auprc_R],
              yerr=[tab.auprc_py - tab.auprc_py_min, tab.auprc_py_max - tab.auprc_py],
              fmt="o", ms=3, color=C_PY, ecolor="#9ec5f4", elinewidth=0.6, mec="white", mew=0.3)
-axa.set_xlabel("AUPRC, scDblFinder (R)")
-axa.set_ylabel("AUPRC, pyscdblfinder")
-panel(axa, "a", dx=-0.3)
+axa.set_title("AUPRC")
+axa.set_xlabel("scDblFinder (R)")
+axa.set_ylabel("pyscdblfinder")
+panel(axa, "a")
 
-axb = fig.add_subplot(top[2])
-identity(axb, 0, 1)
-axb.scatter(tab.spearman_RR, tab.spearman_pR, s=10, color=C_PY, edgecolor="white", linewidth=0.3)
-axb.set_xlabel("score Spearman, R seed 1 vs seed 2")
-axb.set_ylabel("score Spearman, Python vs R")
-panel(axb, "b", dx=-0.3)
+for ax, xcol, ycol, title, lab in [
+    (fig.add_subplot(top[2]), "spearman_RR", "spearman_pR", "Score Spearman", "b"),
+    (fig.add_subplot(top[3]), "jaccard_RR", "jaccard_pR", "Doublet-call Jaccard", "c"),
+]:
+    identity(ax, 0.5, 1)
+    ax.scatter(tab[xcol], tab[ycol], s=10, color=C_PY, edgecolor="white", linewidth=0.3)
+    ax.set_title(title)
+    ax.set_xlabel("R seed 1 vs R seed 2")
+    ax.set_ylabel("Python vs R")
+    panel(ax, lab)
 
-axc = fig.add_subplot(top[3])
-identity(axc, 0, 1)
-axc.scatter(tab.jaccard_RR, tab.jaccard_pR, s=10, color=C_PY, edgecolor="white", linewidth=0.3)
-axc.set_xlabel("doublet calls Jaccard, R vs R")
-axc.set_ylabel("doublet calls Jaccard, Python vs R")
-panel(axc, "c", dx=-0.3)
-
-bot = gs[1].subgridspec(1, 2, width_ratios=[1.0, 1.5], wspace=0.3)
+bot = gs[1].subgridspec(1, 2, width_ratios=[1.0, 2.0], wspace=0.22)
 axd = fig.add_subplot(bot[0])
 axd.scatter(tab.cells, tab.sec_R, s=10, color=C_R, edgecolor="white", linewidth=0.3, label="scDblFinder 1.16.0 (R)")
 axd.scatter(tab.cells, tab.sec_py, s=10, color=C_PY, edgecolor="white", linewidth=0.3, label="pyscdblfinder")
@@ -139,25 +137,30 @@ axd.set_xscale("log")
 axd.set_yscale("log")
 axd.set_xlabel("cells")
 axd.set_ylabel("wall time, 1 thread (s)")
+axd.set_title("Run time")
 axd.grid(color=GRID, lw=0.5)
 axd.set_axisbelow(True)
-axd.legend(fontsize=5, loc="upper left")
-panel(axd, "d")
+axd.legend(fontsize=5.5, loc="upper left", handletextpad=0.1)
+panel(axd, "d", dx=-0.3)
 
 axe = fig.add_subplot(bot[1])
 x = np.arange(len(tab))
-w = 0.27
-axe.bar(x - w, tab.doublet_rate * 100, w * 0.9, color="#c7c6c0", label="annotated doublets")
+w = 0.28
+axe.bar(x - w, tab.doublet_rate * 100, w * 0.9, color="#c7c6c0", label="annotated")
 axe.bar(x, tab.called_R * 100, w * 0.9, color=C_R, label="called, scDblFinder (R)")
 axe.bar(x + w, tab.called_py * 100, w * 0.9, color=C_PY, label="called, pyscdblfinder")
-axe.set_xticks(x, [f"{d}\n({c:,})" for d, c in zip(tab.dataset, tab.cells)], rotation=90, fontsize=4.6)
+axe.set_xticks(x, [f"{d} ({c / 1000:.1f}k)" for d, c in zip(tab.dataset, tab.cells)], rotation=50, ha="right",
+               rotation_mode="anchor", fontsize=5)
+axe.set_xlim(-0.6, len(tab) - 0.4)
 axe.set_ylabel("doublets (% of cells)")
+axe.set_title("Doublets per dataset")
 axe.grid(axis="y", color=GRID, lw=0.5)
 axe.set_axisbelow(True)
-axe.legend(fontsize=5, loc="upper left")
-panel(axe, "e", dx=-0.06)
-fig.savefig(OUT / "fig1.pdf", bbox_inches="tight")
-fig.savefig(OUT / "fig1.png", bbox_inches="tight", dpi=200)
+axe.legend(fontsize=5.5, loc="upper left", ncol=3, handlelength=1, columnspacing=1)
+axe.set_ylim(0, 44)
+panel(axe, "e", dx=-0.1)
+fig.savefig(OUT / "fig1.pdf", bbox_inches="tight", pad_inches=0.02)
+fig.savefig(OUT / "fig1.png", bbox_inches="tight", pad_inches=0.02, dpi=200)
 
 # ======================= numbers =======================
 ratio_sp = tab.spearman_pR / tab.spearman_RR
