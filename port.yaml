@@ -19,13 +19,13 @@ omicverse:
   module: null   # TODO: e.g. ov.single.pyDoubletFinder, or leave null
   since: null
 parity:
-  status: partial   # ATAC deterministic paths exact; stochastic paths at R's seed-to-seed level; RNA scores loosely (see README)
+  status: partial   # deterministic steps exact; stochastic scores at R's seed-to-seed level (RNA and ATAC)
   algorithm_class: mixed   # amulet/amuletFromCounts deterministic; scDblFinder/clamulet stochastic (xgboost)
-  metric: max_rel_diff (amulet p/q); spearman (scDblFinder ATAC scores)
-  threshold: "1e-10 (amulet); >= 0.9 x R-vs-R spearman (scDblFinder ATAC)"
-  value: "6.5e-15 (amulet); 0.724 vs R-R 0.729 (scDblFinder ATAC)"
-  fixture: "GEO GSE162690 CellLine LowLoading, 3,000 cells (336 demuxlet doublets), chr1/19-22/X fragments"
-  test: "examples/parity_atac.py + tests/r_reference_driver_atac.R; tests/test_atac.py (no R needed)"
+  metric: max_rel_diff (amulet p/q, thresholds); spearman (scDblFinder scores)
+  threshold: "1e-10 (amulet); 1e-9 (thresholds); >= 0.9 x R-vs-R spearman (scDblFinder)"
+  value: "6.5e-15 (amulet); RNA median 0.874 vs R-R 0.874 on 16 Xi & Li datasets; ATAC 0.724 vs R-R 0.729"
+  fixture: "RNA: Xi & Li (2021) J293t-dm, 500 cells x 3,000 genes; ATAC: GEO GSE162690 CellLine LowLoading, 3,000 cells (336 demuxlet doublets), chr1/19-22/X fragments"
+  test: "tests/test_rna_reference.py; examples/parity_atac.py + tests/r_reference_driver_atac.R; tests/test_atac.py (no R needed)"
 artifacts:
   audit: null
   report: null

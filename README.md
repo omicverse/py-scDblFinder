@@ -144,52 +144,33 @@ The single-sample RNA path ports the whole classifier loop, kNN feature
 extraction, and thresholding — i.e. everything needed for ~95% of real
 `scDblFinder()` calls.
 
-## Relationship to R scDblFinder — what matches, what can't
+## Relationship to R scDblFinder
 
-`pyscdblfinder` ports the full single-sample pipeline of R `scDblFinder`. Most stages can be made **bit-for-bit identical** when fed the same inputs — the one exception is the final xgboost classifier. Here's the breakdown:
+Since 0.3.1 the RNA path follows R scDblFinder 1.16.0 step by step: feature selection
+(`rowMeans` order), scuttle log-normalisation and PCA, artificial-doublet pairing, the
+`.defaultKnnKs` grid, the training-exclusion rules, `.xgbtrain` (exact trees, cross-validated
+number of rounds) and `doubletThresholding` (Brent minimisation, as `stats::optimize`).
 
-### Fully reproducible given matching inputs
+Steps without random numbers are checked against stored R output in
+`tests/test_rna_reference.py` (no R needed): selected features, kNN grid, library-size features
+and thresholds (relative error < 1e-9). Artificial doublets and xgboost use random numbers in
+both languages, so the scores are compared with R's own seed-to-seed agreement.
 
-Given the same artificial-doublet cell pairs and the same PCA embedding, these features match R to `atol=1e-12`:
+On the 16 real datasets of the Xi & Li (2021) benchmark (168,239 cells, two seeds per
+implementation; scripts in `report/scripts`):
 
-| Step | Python counterpart | Reproducible vs R? |
+| | R vs R (seed 1 vs 2) | Python vs R |
 |---|---|---|
-| Library sizes, nfeatures, nAbove2 | `core.py` | ✅ colSums |
-| cxds (coexpression score) | `cxds.py` | ✅ pure arithmetic |
-| kNN ratios `ratio.k{k}` | `knn_features.py` | ✅ integer counts |
-| Distance-weighted score `weighted` | `knn_features.py` | ✅ |
-| distanceToNearest / *Doublet / *Real | `knn_features.py` | ✅ |
-| Initial score `(cxds + ratio/max)/2` | `classifier.py` | ✅ |
+| score Spearman, median | 0.874 | 0.874 |
+| doublet-call Jaccard, median | 0.770 | 0.768 |
 
-### xgboost classifier — intentionally stochastic, can't align
+| | scDblFinder 1.16.0 | pyscdblfinder 0.3.1 |
+|---|---|---|
+| mean AUPRC | 0.562 | 0.560 |
+| mean AUROC | 0.796 | 0.794 |
 
-The final scoring step trains a gradient-boosted tree classifier with:
-
-- **`subsample=0.75`** — each boosting round samples 75% of training rows at random
-- **`colsample_*`** — random column subsets
-- **3-iteration training** — each iteration excludes likely-doublet real cells from the next round's training set
-
-Even with identical seeds, R's and Python's xgboost bindings diverge because:
-
-1. **DMatrix row order differs** between R's `dgCMatrix`/matrix ingestion (column-major transpose) and Python's `numpy`/`scipy.csr` (row-major). xgboost's internal PRNG **does** generate identical `{0.12, 0.87, 0.43, ...}` on both sides, but the "✓" mask lands on different physical cells.
-2. **Different xgboost package versions** (R ships 1.7.x on CRAN, Python ships 3.0.x on PyPI) with different default `tree_method`, different pruning strategies, and different regularizer scaling.
-3. **Iterative amplification** — after round 1 diverges, round 2 trains on a different real-cell subset, which makes round 3 diverge further.
-4. **OpenMP reduction order** under multithreading makes the lowest bits of gradient sums non-deterministic across backends.
-
-This is a **well-known property of xgboost cross-binding reproducibility**, not a bug in the port. See e.g. [dmlc/xgboost#2936](https://github.com/dmlc/xgboost/issues/2936).
-
-### What the tests actually check
-
-`tests/test_r_parity.py` runs the real R package on `mockDoubletSCE` inside the CMAP conda env and compares:
-
-| Check | Threshold | Observed (mockDoubletSCE) | Observed (pbmc3k) |
-|---|---|---|---|
-| Classification overlap (py == R) | ≥ 70% | **97.0%** | **96.2%** |
-| Score Spearman rank correlation | ≥ 0.2 | **0.30** | (higher on larger datasets) |
-| py recall vs planted doublets | — | **100% (34/34)** | — |
-| R recall vs planted doublets | — | 56% (19/34) | — |
-
-Practical takeaway: **cells whose call matters — the high-score outliers — agree across implementations**. Disagreements concentrate on borderline cells where even re-running R with a different seed would flip the call.
+On one thread, pyscdblfinder ran 1.1–2.5× faster than R (median 1.4×). ATAC-mode parity is
+documented in [`PARITY_ATAC.md`](PARITY_ATAC.md).
 
 ## Citation
 

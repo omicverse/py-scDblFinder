@@ -51,7 +51,7 @@ def cxds_score(
             p_per_gene = (dense > 0).sum(axis=1) / n_cells
             sel = np.argsort(p_per_gene)[:n_top]
             dense = dense[sel]
-            bin_thresh = max(1.0, float(np.quantile(dense[dense > 0], 0.5 * p_per_gene[sel].mean())))
+            bin_thresh = max(1.0, float(np.quantile(dense[dense > 0], 0.5 * p_per_gene.mean())))  # R: mean over all genes
         else:
             bin_thresh = 1.0
 
