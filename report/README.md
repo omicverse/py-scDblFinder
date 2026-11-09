@@ -7,6 +7,7 @@ Real-data comparison on the 16 datasets of the Xi & Li (2021) doublet benchmark
 Rscript scripts/01_prepare.R <real_datasets_dir> <tasks_dir>
 python  scripts/run_all.py <tasks_dir> <runs_dir> <Rscript> <python> 8 1,2   # one core per run
 python  scripts/05_figures.py <runs_dir> <tasks_dir> figures
+python  scripts/06_umap.py <runs_dir> <tasks_dir> figures            # Fig. 2, UMAP of pbmc-2ctrl-dm
 ```
 
 R: scDblFinder 1.16.0, R 4.3.3, xgboost 1.7.6.1. Python: pyscdblfinder 0.3.2, xgboost 3.0.5.
