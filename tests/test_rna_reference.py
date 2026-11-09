@@ -82,3 +82,11 @@ def test_accuracy_matches_r(py_runs):
     r = np.mean([average_precision_score(y, _read(f"rna_seed{s}.tsv")["score"]) for s in (1, 2, 3)])
     p = np.mean([average_precision_score(y, run.table["score"].to_numpy(float)[: run.n_real]) for run in py_runs])
     assert p >= r - 0.05, (p, r)
+
+
+def test_class_api_matches_functional(counts, py_runs):
+    import anndata
+    sdf = pyscdblfinder.ScDblFinder(anndata.AnnData(sp.csr_matrix(counts.T)), random_state=1)
+    sdf.run(progress=False)
+    np.testing.assert_array_equal(sdf.adata.obs["scDblFinder_score"].to_numpy(float),
+                                  py_runs[0].table["score"].to_numpy(float)[: py_runs[0].n_real])

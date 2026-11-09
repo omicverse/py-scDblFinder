@@ -66,7 +66,7 @@ class ScDblFinder:
         artificial_doublets: Optional[int] = None,
         dbr: Optional[float] = None,
         dbr_sd: Optional[float] = None,
-        dbr_per1k: float = 0.008,
+        dbr_per1k: Optional[float] = None,
         n_features: int = 1352,
         dims: int = 20,
         k: Optional[int | list[int]] = None,
