@@ -9,5 +9,5 @@ python  scripts/run_all.py <tasks_dir> <runs_dir> <Rscript> <python> 8 1,2   # o
 python  scripts/05_figures.py <runs_dir> <tasks_dir> figures
 ```
 
-R: scDblFinder 1.16.0, R 4.3.3, xgboost 1.7.6.1. Python: pyscdblfinder 0.3.1, xgboost 3.0.5.
+R: scDblFinder 1.16.0, R 4.3.3, xgboost 1.7.6.1. Python: pyscdblfinder 0.3.2, xgboost 3.0.5.
 `figures/comparison_per_dataset.tsv` holds the per-dataset numbers.

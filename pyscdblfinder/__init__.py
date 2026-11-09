@@ -42,7 +42,7 @@ from .preprocessing import default_processing, log_normalize, select_features
 from .scdblfinder import ScDblFinder
 from .thresholding import doublet_thresholding
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 __all__ = [
     # class API
