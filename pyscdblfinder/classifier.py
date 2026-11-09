@@ -46,23 +46,17 @@ def _xgb_train(
     subsample: float = 0.75,
     nfold: int = 5,
     nthreads: int = 0,
-    tree_method: str = "hist",
+    tree_method: str = "exact",
     device: str = "cpu",
     random_state: int = 0,
 ):
-    """Train the binary xgboost classifier.
+    """R ``.xgbtrain`` (scDblFinder 1.16).
 
-    If ``nrounds <= 1``, use 5-fold CV to pick a round count, then subtract
-    ``nrounds * sd(CV error)`` from the best round (matches R behavior).
-    Otherwise use ``nrounds`` directly.
-
-    Performance
-    -----------
-    ``tree_method='hist'`` (xgboost's own modern default) is 5-10x faster than
-    the old ``'exact'`` at 10^5+ cells with near-identical accuracy, and is the
-    single biggest speedup for large-atlas doublet detection. ``device='auto'``
-    trains on the GPU when a CUDA-capable xgboost build is present (falling back
-    to CPU otherwise); ``nthreads=0`` uses all cores.
+    With ``nrounds <= 1`` the number of rounds comes from a 5-fold (stratified, as R's
+    ``xgb.cv``) cross-validation of up to 200 rounds with early stopping after 2: for
+    ``nrounds == 0`` the best round, otherwise the first round whose mean test error is within
+    ``nrounds`` standard deviations of the best. ``subsample`` is used in the cross-validation
+    only, as in R. ``tree_method='exact'`` as in R; ``'hist'`` is faster on very large data.
     """
     import xgboost as xgb
 
@@ -71,7 +65,6 @@ def _xgb_train(
         "eval_metric": metric,
         "max_depth": int(max_depth),
         "learning_rate": float(eta),
-        "subsample": float(subsample),
         "tree_method": tree_method,
         "nthread": _resolve_nthreads(nthreads),
         "verbosity": 0,
@@ -83,20 +76,22 @@ def _xgb_train(
     dtrain = xgb.DMatrix(X, label=y.astype(np.float32))
 
     def _fit(p):
-        if nrounds is None or float(nrounds) <= 1.0:
-            cv = xgb.cv(
-                p, dtrain, num_boost_round=100,
-                nfold=min(nfold, max(3, X.shape[0] // 10)),
-                early_stopping_rounds=10, seed=int(random_state), verbose_eval=False,
-            )
-            err_col = next(c for c in cv.columns if c.endswith("-mean") and "test" in c)
-            sd_col = err_col.replace("-mean", "-std")
-            best = int(cv[err_col].idxmin())
-            best -= int(round(float(nrounds) * cv[sd_col].iloc[best]))
-            n = max(5, best)
-        else:
-            n = int(nrounds)
-        return xgb.train(p, dtrain, num_boost_round=n)
+        n = nrounds
+        if n is None:
+            n = 0
+        if float(n) <= 1.0:
+            cv = xgb.cv({**p, "subsample": float(subsample)}, dtrain, num_boost_round=200, nfold=nfold,
+                        stratified=True, early_stopping_rounds=2, seed=int(random_state), verbose_eval=False)
+            mean_col = next(c for c in cv.columns if c.startswith("test") and c.endswith("-mean"))
+            std_col = mean_col.replace("-mean", "-std")
+            mean = cv[mean_col].to_numpy(float)
+            best = int(np.argmin(mean))                       # 0-based best iteration
+            if float(n) == 0:
+                n = best + 1
+            else:
+                ac = mean[best] + float(n) * cv[std_col].to_numpy(float)[best]
+                n = int(np.flatnonzero(mean <= ac)[0]) + 1
+        return xgb.train(p, dtrain, num_boost_round=int(n))
 
     try:
         return _fit(params)
@@ -143,90 +138,67 @@ def scDbl_score(
     max_depth: int = 4,
     iter: int = 3,
     dbr: Optional[float] = None,
-    dbr_per1k: float = 0.008,
-    unident_th: float = 0.1,
+    dbr_sd: Optional[float] = None,
+    dbr_per1k: Optional[float] = None,
+    unident_th: float = 0.2,
+    filter_unidentifiable: bool = True,
     metric: str = "logloss",
+    eta: float = 0.3,
+    tree_method: str = "exact",
+    nthreads: int = 1,
     random_state: int = 0,
     verbose: bool = False,
     progress: bool = True,
 ) -> pd.DataFrame:
-    """Port of R ``.scDblscore`` (``scoreType='xgb'``).
+    """R ``.scDblscore`` (``scoreType='xgb'``, single sample).
 
-    ``d`` must have columns ``type`` ("real"/"doublet"), ``src`` ("real"/"artificial"),
-    and the numeric features from ``evaluate_knn`` / ``cxds_score``.
-    Adds a ``score`` column (predicted doublet probability) to ``d``.
+    ``d`` has ``type`` ("real"/"doublet"), ``src`` ("real"/"artificial") and the features of
+    ``evaluate_knn``, ``cxds_score``, ``lsizes``, ``nfeatures`` and ``nAbove2``. The score starts
+    as the mean of ``cxds_score`` and the scaled largest-k neighbour ratio; each iteration then
+    trains xgboost without the real cells called doublets (stringency 0.7), the artificial
+    doublets scoring below ``unident_th`` and cells not ``include.in.training``, and rescores all
+    cells. Adds ``score`` and updates ``include.in.training``.
     """
-    import xgboost as xgb
+    from .thresholding import doublet_thresholding, gdbr as _gdbr
 
     d = d.copy()
-    if features is None:
-        feat_cols = _default_features(d)
-    else:
-        feat_cols = [c for c in features if c in d.columns]
+    if "include.in.training" not in d:
+        d["include.in.training"] = True
+    if dbr is None and dbr_per1k is not None:
+        dbr = dbr_per1k * int((d["src"].values == "real").sum()) / 1000.0
+    if dbr_sd is None:
+        dbr_sd = 0.3 * _gdbr(d, dbr) + 0.025
+    feat_cols = _default_features(d) if features is None else [c for c in features if c in d.columns]
     X = d[feat_cols].astype(float).values
     if add_vals is not None:
         X = np.concatenate([X, np.asarray(add_vals, dtype=float)], axis=1)
-
     y = (d["type"].values == "doublet").astype(np.int32)
 
-    # Initial score — average of cxds_score and normalized ratio (R line:
-    # d$score <- (d$cxds_score + d[[ratio]]/max(d[[ratio]]))/2)
     ratio_cols = [c for c in d.columns if c.startswith("ratio.k")]
-    ratio_col = ratio_cols[-1] if ratio_cols else None
-    if ratio_col is not None and "cxds_score" in d.columns:
-        rat = d[ratio_col].astype(float).values
-        rat = rat / (rat.max() if rat.max() > 0 else 1.0)
-        d["score"] = (d["cxds_score"].astype(float).values + rat) / 2.0
-    elif ratio_col is not None:
-        d["score"] = d[ratio_col].astype(float).values
-    else:
-        d["score"] = 0.5
+    rat = d[ratio_cols[-1]].astype(float).values
+    d["score"] = (d["cxds_score"].astype(float).values + rat / rat.max()) / 2.0
 
-    n_real = int((d["type"].values == "real").sum())
-    n_dbl = int((d["type"].values == "doublet").sum())
-    if dbr is None:
-        # Expected doublet rate from dbr.per1k: fraction ≈ dbr_per1k * n_real / 1000
-        dbr = dbr_per1k * n_real / 1000.0
-    # Deviation budget
-    for it in _progress_iter(range(int(iter)), total=int(iter),
-                             desc="scDblFinder: training", enabled=progress):
-        # Exclude cells that look like doublets (top-dbr-ish fraction) from training
-        from .thresholding import doublet_thresholding
-        exclude_real = np.where(
-            (d["type"].values == "real") &
-            (doublet_thresholding(d, dbr=dbr, stringency=0.7, return_type="call") == "doublet")
-        )[0]
-        # Cap the excluded fraction so we don't starve the training set
-        if exclude_real.size > n_real // 3:
-            sort_idx = np.argsort(-d["score"].values)
-            exclude_real = [i for i in sort_idx if d["type"].values[i] == "real"][:int(0.2 * n_real)]
-            exclude_real = np.asarray(exclude_real, dtype=int)
-
-        exclude_dbl = np.where(
-            (d["type"].values == "doublet") & (d["score"].values < unident_th)
-        )[0]
-        if exclude_dbl.size > n_dbl // 4:
-            sort_idx = np.argsort(d["score"].values)
-            exclude_dbl = [i for i in sort_idx if d["type"].values[i] == "doublet"][:int(0.1 * n_dbl)]
-            exclude_dbl = np.asarray(exclude_dbl, dtype=int)
-
-        include = np.ones(len(d), dtype=bool)
-        include[exclude_real] = False
-        include[exclude_dbl] = False
-
+    is_real = d["type"].values == "real"
+    exclude = np.zeros(len(d), dtype=bool)
+    for it in _progress_iter(range(int(iter)), total=int(iter), desc="scDblFinder: training", enabled=progress):
+        called = doublet_thresholding(d, dbr=dbr, dbr_sd=dbr_sd, stringency=0.7, return_type="call") == "doublet"
+        exclude = ((is_real & called)
+                   | (~is_real & (d["score"].values < unident_th) & filter_unidentifiable)
+                   | ~d["include.in.training"].to_numpy(bool))
         if verbose:
-            print(f"[scDblscore] iter={it}  excluding {(~include).sum()} cells from training")
-
+            print(f"[scDblscore] iter={it}, {int(exclude.sum())} cells excluded from training.")
         try:
-            bst = _xgb_train(
-                X[include], y[include],
-                nrounds=nrounds, max_depth=max_depth, metric=metric,
-                random_state=random_state,
-            )
-            dmat_all = xgb.DMatrix(X)
-            d["score"] = bst.predict(dmat_all)
-        except Exception as exc:  # pragma: no cover
+            bst = _xgb_train(X[~exclude], y[~exclude], nrounds=nrounds, max_depth=max_depth, eta=eta,
+                             metric=metric, tree_method=tree_method, nthreads=nthreads,
+                             random_state=random_state + it)
+            d["score"] = bst.predict(_xgb_dmatrix(X))
+        except Exception as exc:  # pragma: no cover - R keeps the previous score on error
             if verbose:
                 print(f"[scDblscore] xgboost failed: {exc}; keeping previous score")
-
+    d.loc[exclude, "include.in.training"] = False
     return d
+
+
+def _xgb_dmatrix(X):
+    import xgboost as xgb
+    return xgb.DMatrix(X)

@@ -30,21 +30,18 @@ def _trim_by_lsize(ls: np.ndarray, trim_q: tuple[float, float]) -> np.ndarray:
 
 
 def _sample_pairs(n_cells: int, n_doublets: int, rng: np.random.Generator) -> np.ndarray:
-    """Sample ``n_doublets`` cell index pairs (with replacement), removing self-self."""
+    """R ``getArtificialDoublets`` random pairs: every pair when ``n_cells^2 <= n``, else ``2n`` indices
+    drawn by ``sample.int`` (with replacement only when ``2n >= n_cells``) and filled column-wise into
+    an ``n x 2`` matrix; self-pairs are dropped, not replaced."""
     if n_cells <= 1:
         raise ValueError("need at least 2 cells to sample doublet pairs")
-    # Oversample 2x then drop self-matches so the final count is close to ``n_doublets``
-    target = n_doublets * 2
-    pairs = rng.integers(0, n_cells, size=(target, 2))
-    keep = pairs[:, 0] != pairs[:, 1]
-    pairs = pairs[keep]
-    if pairs.shape[0] > n_doublets:
-        pairs = pairs[:n_doublets]
-    while pairs.shape[0] < n_doublets:
-        more = rng.integers(0, n_cells, size=(n_doublets - pairs.shape[0], 2))
-        more = more[more[:, 0] != more[:, 1]]
-        pairs = np.vstack([pairs, more])
-    return pairs[:n_doublets]
+    if n_cells ** 2 <= n_doublets:
+        a, b = np.meshgrid(np.arange(n_cells), np.arange(n_cells), indexing="xy")
+        pairs = np.column_stack([a.ravel(), b.ravel()])
+    else:
+        idx = rng.choice(n_cells, size=2 * n_doublets, replace=(2 * n_doublets >= n_cells))
+        pairs = idx.reshape(2, n_doublets).T
+    return pairs[pairs[:, 0] != pairs[:, 1]]
 
 
 def _create_doublets(
@@ -104,20 +101,19 @@ def _create_doublets(
     else:
         out = x1
 
-    # Half-size a fraction
+    # R createDoublets: halve a fraction; when resamp == halfSize the same doublets are then
+    # Poisson-resampled, otherwise a new fraction is drawn. Without resampling the counts are rounded.
+    n_rows = pairs.shape[0]
+    h_idx = np.array([], dtype=int)
     if half_size > 0 and out.shape[1] > 0:
-        n_h = int(np.ceil(half_size * out.shape[1]))
-        h_idx = rng.choice(out.shape[1], size=n_h, replace=False)
-        out[:, h_idx] = out[:, h_idx] / 2.0
-
-    # Resample (Poisson) a fraction, else round
+        h_idx = rng.choice(n_rows, size=int(np.ceil(half_size * n_rows)), replace=False)
+        if h_idx.size:
+            out[:, h_idx] = out[:, h_idx] / 2.0
     if resamp > 0 and out.shape[1] > 0:
-        n_r = int(np.ceil(resamp * out.shape[1]))
-        r_idx = rng.choice(out.shape[1], size=n_r, replace=False)
-        out[:, r_idx] = rng.poisson(np.clip(out[:, r_idx], 0, None)).astype(np.float64)
-        # Round the rest
-        rest = np.setdiff1d(np.arange(out.shape[1]), r_idx, assume_unique=False)
-        out[:, rest] = np.round(out[:, rest])
+        r_idx = h_idx if resamp == half_size else rng.choice(
+            out.shape[1], size=int(np.ceil(resamp * out.shape[1])), replace=False)
+        if r_idx.size:
+            out[:, r_idx] = rng.poisson(np.clip(out[:, r_idx], 0, None)).astype(np.float64)
     else:
         out = np.round(out)
 

@@ -22,7 +22,8 @@ from .atac import aggregate_features as _aggregate_features
 from .atac import atac_processing, log_norm_counts
 from .classifier import scDbl_score
 from .cxds import cxds_score
-from .knn_features import default_k_grid, evaluate_knn
+from .clamulet import r_default_knn_ks
+from .knn_features import evaluate_knn
 from .preprocessing import default_processing, select_features
 from .thresholding import doublet_thresholding
 
@@ -56,7 +57,7 @@ def sc_dbl_finder(
     artificial_doublets: Optional[int] = None,
     dbr: Optional[float] = None,
     dbr_sd: Optional[float] = None,
-    dbr_per1k: float = 0.008,
+    dbr_per1k: Optional[float] = None,
     n_features: int = 1352,
     dims: int = 20,
     k: Optional[int | list[int]] = None,
@@ -74,6 +75,7 @@ def sc_dbl_finder(
     pca_backend: str = "auto",
     aggregate_features=False,
     processing="default",
+    nthreads: int = 1,
     verbose: bool = False,
     progress: bool = True,
 ) -> ScDblFinderResult:
@@ -81,6 +83,9 @@ def sc_dbl_finder(
 
     Parameters largely match the R signature. ``counts`` must be a
     **features × cells** matrix (dense ndarray or scipy sparse).
+
+    ``nthreads`` is the number of xgboost threads; 1 by default, as R's
+    ``scDblFinder`` with its default ``BPPARAM = SerialParam()``.
 
     ATAC mode
     ---------
@@ -172,36 +177,42 @@ def sc_dbl_finder(
     # 6) kNN features
     if verbose:
         print("[scDblFinder] kNN features")
-    k_list = default_k_grid(n_real, k)
-    d = evaluate_knn(pca, ctype, k=k_list, origins=all_origins,
-                     knn_fn=knn_fn, knn_backend=knn_backend)
-    d["type"] = np.where(ctype == 0, "real", "doublet")
-    d["src"] = np.where(ctype == 0, "real", "artificial")
-    d["cxds_score"] = cxds
+    k_list = r_default_knn_ks(n_real, k)                     # R .defaultKnnKs(k, ncol(sce))
+    has_origins = clusters is not None
+    knn = evaluate_knn(pca, ctype, k=k_list, origins=all_origins if has_origins else None,
+                       knn_fn=knn_fn, knn_backend=knn_backend)
+    # column order of R's table: it is also the order of the xgboost features
+    d = pd.DataFrame({"type": np.where(ctype == 0, "real", "doublet")})
+    d = pd.concat([d, knn], axis=1)
     d["lsizes"] = lsizes
     d["nfeatures"] = n_feat
     d["nAbove2"] = n_above2
+    d["src"] = np.where(ctype == 0, "real", "artificial")
+    d["cxds_score"] = cxds
+    d["include.in.training"] = True
 
     # 7) xgboost classification loop
     if verbose:
         print("[scDblFinder] xgboost scoring")
     # Include the top principal components as additional predictors
-    n_pc_use = int(include_pcs) if np.isscalar(include_pcs) else len(include_pcs)
-    add_vals = pca[:, : min(n_pc_use, pca.shape[1] - 1)]
+    pcs = np.arange(1, int(include_pcs) + 1) if np.isscalar(include_pcs) else np.asarray(include_pcs, int)
+    pcs = pcs[pcs < pca.shape[1]]                            # R: includePCs[includePCs < ncol(pca)]
+    add_vals = pca[:, pcs - 1]
+    if dbr is None and dbr_per1k is not None:
+        dbr = dbr_per1k * n_real / 1000.0
+    if dbr_sd is None:
+        dbr_sd = 0.3 * (dbr if dbr is not None else 0.01 * n_real / 1000.0) + 0.025   # .scDblscore
     d = scDbl_score(
         d, add_vals=add_vals,
         nrounds=nrounds, max_depth=max_depth, iter=iter,
-        dbr=dbr, dbr_per1k=dbr_per1k, unident_th=float(unident_th),
-        metric=metric, random_state=random_state, verbose=verbose,
+        dbr=dbr, dbr_sd=dbr_sd, unident_th=float(unident_th),
+        metric=metric, nthreads=nthreads, random_state=random_state, verbose=verbose,
         progress=progress,
     )
 
     # 8) Threshold
     if threshold:
-        th = doublet_thresholding(
-            d, dbr=dbr, dbr_sd=dbr_sd, dbr_per1k=dbr_per1k,
-            return_type="threshold",
-        )
+        th = doublet_thresholding(d, dbr=dbr, dbr_sd=dbr_sd, return_type="threshold")
         d["class"] = np.where(d["score"].values >= th, "doublet", "singlet")
     else:
         th = float("nan")

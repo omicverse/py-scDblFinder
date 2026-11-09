@@ -32,58 +32,38 @@ def default_processing(
     counts,
     *,
     dims: int = 20,
-    do_norm: bool = True,
+    do_norm: Optional[bool] = None,
     random_state: int = 0,
     backend: str = "auto",
 ) -> np.ndarray:
-    """Return a ``(n_cells, dims)`` PCA embedding of the merged matrix.
-
-    Mirrors R's ``.defaultProcessing`` (scater's ``runPCA`` on log-normalized
-    counts with centering).
+    """R ``.defaultProcessing``: ``scuttle::normalizeCounts`` (log2 of counts over centred
+    library-size factors, pseudo-count 1; skipped above 50,000 cells, as in R) and a centred
+    PCA of all features.
 
     backend
-        ``'auto'`` (default) uses scikit-learn's **randomized** truncated SVD —
-        many times faster than the full solver on large cell numbers with only
-        ~20 PCs, and numerically equivalent for a leading low-rank embedding.
-        ``'torch'`` runs the SVD on GPU via ``torch.pca_lowrank`` (falls back to
-        CPU torch if CUDA is unavailable); ``'sklearn-full'`` forces the exact
-        full solver.
+        ``'auto'`` (default) computes the leading principal components exactly (float64
+        SVD); R uses irlba, an iterative solver for the same components. ``'torch'`` runs a
+        low-rank SVD on the GPU via ``torch.pca_lowrank`` when available.
     """
-    if do_norm:
-        norm = log_normalize(counts)
-    else:
-        norm = counts.toarray() if sp.issparse(counts) else np.asarray(counts, dtype=np.float64)
-
-    # PCA on cells x genes (transpose)
-    X = np.asarray(norm.T, dtype=np.float32)
+    from .atac import log_norm_counts
+    if do_norm is None:
+        do_norm = counts.shape[1] <= 50000
+    norm = log_norm_counts(counts) if do_norm else (
+        counts.toarray() if sp.issparse(counts) else np.asarray(counts, dtype=np.float64))
+    X = np.asarray(norm.T, dtype=np.float64)                 # cells x genes
     n_pcs = min(int(dims), min(X.shape) - 1)
-
     if backend == "torch":
-        emb = _torch_pca(X, n_pcs, random_state)
+        emb = _torch_pca(X.astype(np.float32), n_pcs, random_state)
         if emb is not None:
-            return emb
-        backend = "auto"
-
-    from sklearn.decomposition import PCA
-    solver = "full" if backend == "sklearn-full" else "randomized"
-    pca = PCA(n_components=n_pcs, svd_solver=solver, random_state=random_state)
-    return pca.fit_transform(X)
-
-
-def _torch_pca(X, n_pcs, random_state):
-    """GPU/torch PCA via ``torch.pca_lowrank``. Returns None if torch missing."""
-    try:
-        import torch
-    except Exception:
-        return None
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.manual_seed(int(random_state))
-    Xt = torch.as_tensor(np.ascontiguousarray(X), dtype=torch.float32, device=dev)
-    Xt = Xt - Xt.mean(dim=0, keepdim=True)                     # center like PCA
-    q = min(n_pcs + 7, min(Xt.shape))
-    U, S, V = torch.pca_lowrank(Xt, q=q, center=False, niter=7)
-    emb = (Xt @ V[:, :n_pcs])
-    return emb.cpu().numpy().astype(np.float64)
+            return np.asarray(emb, dtype=np.float64)
+    X = X - X.mean(axis=0, keepdims=True)
+    if X.shape[1] <= X.shape[0]:
+        # eigen-decomposition of the genes x genes covariance: exact and cheap for ~1,000 genes
+        evals, evecs = np.linalg.eigh(X.T @ X)
+        top = np.argsort(evals)[::-1][:n_pcs]
+        return X @ evecs[:, top]
+    U, S, _ = np.linalg.svd(X, full_matrices=False)
+    return U[:, :n_pcs] * S[:n_pcs]
 
 
 def select_features(
@@ -91,19 +71,25 @@ def select_features(
     clusters: Optional[np.ndarray] = None,
     n_features: int = 1352,
 ) -> np.ndarray:
-    """Simple variance-based feature selection (genes × cells).
+    """R ``selFeatures`` with ``propMarkers = 0``.
 
-    The R version has a marker-aware variant; we ship only the purely
-    variance-driven path here, which matches the ``propMarkers=0`` branch
-    used by default for the scRNA-seq path.
+    Without clusters: the ``n_features`` genes with the highest mean count (R
+    ``order(rowMeans(counts), decreasing = TRUE)``; ties keep their row order).
+    With clusters: per cluster, genes ordered by summed counts, interleaved
+    across clusters and de-duplicated, as R does.
     """
-    if sp.issparse(counts):
-        mean = np.asarray(counts.mean(axis=1)).ravel()
-        mean2 = np.asarray(counts.multiply(counts).mean(axis=1)).ravel()
-        var = mean2 - mean ** 2
-    else:
-        counts = np.asarray(counts, dtype=np.float64)
-        mean = counts.mean(axis=1)
-        var = counts.var(axis=1, ddof=0)
-    n_features = min(int(n_features), counts.shape[0])
-    return np.argsort(-var)[:n_features]
+    n_genes = counts.shape[0]
+    n_features = min(int(n_features), n_genes)
+    if n_genes <= n_features:
+        return np.arange(n_genes)
+    if clusters is None:
+        sums = np.asarray(counts.sum(axis=1)).ravel()     # exact; float means break R's tie order
+        return np.argsort(-sums, kind="stable")[:n_features]
+    clusters = np.asarray(clusters)
+    lv = np.unique(clusters)
+    X = counts.tocsc() if sp.issparse(counts) else np.asarray(counts)
+    sums = np.column_stack([np.asarray(X[:, clusters == c].sum(axis=1)).ravel() for c in lv])
+    tops = np.argsort(-sums, axis=0, kind="stable")[:n_features]          # n_features x n_clusters
+    _, first = np.unique(tops.ravel(), return_index=True)                   # row-major = R's t(apply(...))
+    order = tops.ravel()[np.sort(first)]
+    return order[:n_features]
