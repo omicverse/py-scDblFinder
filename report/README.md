@@ -1,7 +1,7 @@
 # Benchmark: pyscdblfinder vs R scDblFinder 1.16.0
 
 Real-data comparison on the 16 datasets of the Xi & Li (2021) doublet benchmark
-(Zenodo 10.5281/zenodo.4062232, `real_datasets.zip`), two seeds per implementation.
+(Zenodo 10.5281/zenodo.4562782, `real_datasets.zip`), two seeds per implementation.
 
 ```
 Rscript scripts/01_prepare.R <real_datasets_dir> <tasks_dir>

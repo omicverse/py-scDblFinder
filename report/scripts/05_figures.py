@@ -167,6 +167,8 @@ ratio_sp = tab.spearman_pR / tab.spearman_RR
 ratio_j = tab.jaccard_pR / tab.jaccard_RR
 speed = tab.sec_R / tab.sec_py
 big = tab.iloc[tab.cells.idxmax()]
+jlow = tab.iloc[ratio_j.idxmin()]
+called_diff = (tab.called_py - tab.called_R).abs() * 100
 macros = {
     "nDatasets": len(tab), "nCellsMin": f"{int(tab.cells.min()):,}", "nCellsMax": f"{int(tab.cells.max()):,}",
     "nCellsTotal": f"{int(tab.cells.sum()):,}",
@@ -182,6 +184,13 @@ macros = {
     "speedMin": f"{speed.min():.1f}", "speedMax": f"{speed.max():.1f}", "speedMed": f"{speed.median():.1f}",
     "tBigR": f"{big.sec_R:.0f}", "tBigPy": f"{big.sec_py:.0f}", "bigName": big.dataset,
     "bigCells": f"{int(big.cells):,}",
+    "calledDiffMax": f"{called_diff.max():.1f}", "calledDiffMed": f"{called_diff.median():.1f}",
+    "calledMinPct": f"{min(tab.called_R.min(), tab.called_py.min()) * 100:.0f}",
+    "calledMaxPct": f"{max(tab.called_R.max(), tab.called_py.max()) * 100:.0f}",
+    "jLowName": jlow.dataset, "jLowCells": f"{int(jlow.cells):,}", "jLowPR": f"{jlow.jaccard_pR:.2f}",
+    "jLowRR": f"{jlow.jaccard_RR:.2f}", "jLowCalled": f"{jlow.called_R * jlow.cells:.0f}",
+    "spLowName": tab.iloc[ratio_sp.idxmin()].dataset,
+    "aurocDiffMax": f"{(tab.auroc_py - tab.auroc_R).abs().max():.3f}",
 }
 with open(OUT / "numbers.tex", "w") as fh:
     for k, v in macros.items():
